@@ -1,0 +1,253 @@
+from collections import Counter
+from music21 import *
+import pandas as pd
+import numpy  as np
+import re
+from itertools import groupby
+from sklearn import preprocessing
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
+from collections import defaultdict
+d = defaultdict(preprocessing.LabelEncoder)
+
+
+
+def ExtractScore(path):
+
+    #this function will read a MIDI file with the score and will convert it into Music21 object
+    #Then it will build a Pandas DataFrame with the information of Notes pitch,octave and duration plus the next step
+    #The only concern is that, if score has several parts, you need to know in which "part" you have the part to analyze
+    #In my sample case, the part where the main Steve Vai guitar solo is. Use the output to detect, see comments below.
+
+    s = converter.parse(path)
+    print("Parsed Midi file into Music21 Objects: ")
+    print(s)  # s is a music21 score object
+    print(" ")
+    partsinside = s.elements
+    partStream = s.parts.stream()
+    print("Parts inside the MIDI file: ")
+    print(partsinside)
+    print(" ")
+    print("You need to know where the solo part of the song is to extract that stream")
+
+    #you need to investigate now which part contains the instrument/solo that you want to analize and selet it here:
+    #In the case of Steve's Vai "For the Love of God", it is the part[5] corresponding to id: <music21.stream.Part 99708208>
+
+    notestream = partStream[5].flat.notes.stream()  # flat to make all voices inside the part available, create iterator
+    print("The part selected now contains: ", notestream.elements)                       #notestream.show('midi') to make sure we have the rigt part.
+    print("")
+
+    lpi,loct, ldur,lpin,loctn,ldurn= [], [] , [], [], [], [] #initalize list we will use for creating DataFrame
+    for  el in notestream.flat.notes:  # Let's loop through the notes iterator and create several lists: pitch, octave, duration
+        if 'chord'  not in str(el):
+            pit = str(el.pitch.name)
+            octa = str(el.pitch.octave)
+            dur = el.duration.type
+            #pit = pit.split(" ")[1][0:2]  # Extract the pitch and octave from the music21 standard notation. In element 1 of the spllit is the info. the elment "0" is the music21 text
+            #print("PIT: ",pit,"   DUR:",dur, "    OCT:", octa)
+            lpi.append(pit)
+            loct.append(octa)
+            ldur.append(dur)
+
+    # now we get the "next" step lists
+
+    lpin = lpi[1:]
+    loctn = loct[1:]
+    ldurn = ldur[1:]
+    lpin.append('End')
+    loctn.append('End')
+    ldurn.append('End')
+
+    #Let's build Dataframe
+
+    dataf = pd.DataFrame({'Origin Pitch':lpi , 'Origin Octave': loct , 'Origin Duration': ldur , 'Next Pitch':lpin , 'Next Octave':loctn , 'Next Duration':ldurn})
+
+    return dataf
+
+
+
+
+
+
+
+
+
+#Main Prog
+scoredf = ExtractScore('C:\\Tabs\\FTLOG.mid')
+#print(scoredf.head(500))
+
+#let's build a Dataframe with notes sequences repetition
+
+cdataf = scoredf.copy()
+estas = cdataf.groupby(['Origin Pitch','Origin Octave','Origin Duration','Next Pitch', 'Next Octave', 'Next Duration']).size().reset_index()
+
+
+#Encode labels
+encoded = scoredf.apply(lambda x: d[x.name].fit_transform(x))
+#print(encoded)
+#To de - encode labels:
+#denconded = encoded.apply(lambda x: d[x.name].inverse_transform(x))
+
+
+#For the inverse enconding let's take a look at the values
+
+
+
+y=encoded['Next Pitch'].copy()
+feats = ['Origin Pitch','Origin Octave','Origin Duration']
+X=encoded[feats].copy()
+Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.33,random_state=324)
+
+
+
+#---------------------------------------------------------------------Use of DecisionTreeClassifier
+Noteclass = DecisionTreeClassifier(max_leaf_nodes=20,random_state=0)
+Noteclass.fit(Xtrain,Ytrain)
+#Predict test set
+Predict = Noteclass.predict(Xtest)
+
+
+print("*************** START PREDICITION AND ALGORITHM****************")
+
+y=encoded['Next Pitch'].copy()
+feats = ['Origin Pitch','Origin Octave','Origin Duration']
+X=encoded[feats].copy()
+Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.33,random_state=324)
+Noteclass = DecisionTreeClassifier(max_leaf_nodes=20,random_state=0)
+Noteclass.fit(Xtrain,Ytrain)
+PredictPitch = Noteclass.predict(Xtest)
+print("DecisionTree  Accuracy on Pitch: ", accuracy_score(y_true=Ytest,y_pred=PredictPitch))
+
+y=encoded['Next Octave'].copy()
+feats = ['Origin Pitch','Origin Octave','Origin Duration']
+X=encoded[feats].copy()
+Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.33,random_state=24)
+NoteclassO = DecisionTreeClassifier(max_leaf_nodes=20,random_state=0)
+NoteclassO.fit(Xtrain,Ytrain)
+PredictOct = NoteclassO.predict(Xtest)
+print("Decision Tree Accuracy on Octave: ", accuracy_score(y_true=Ytest,y_pred=PredictOct))
+
+y=encoded['Next Duration'].copy()
+feats = ['Origin Pitch','Origin Octave','Origin Duration']
+X=encoded[feats].copy()
+Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.33,random_state=32)
+NoteclassD = DecisionTreeClassifier(max_leaf_nodes=20,random_state=0)
+NoteclassD.fit(Xtrain,Ytrain)
+PredictDur = NoteclassD.predict(Xtest)
+print("Decision Tree Accuracy on Duration: ", accuracy_score(y_true=Ytest,y_pred=PredictDur))
+
+
+
+#let's build a 500 notes song:
+
+#init with a random note
+tt = encoded.sample(1)  # get random value to start the song
+initnote = tt['Origin Pitch'].values
+initdur= tt['Origin Duration'].values
+initoctave= tt['Origin Octave'].values
+
+lll = []
+#transform back the labels into real values.
+
+for aa in range(1,2):
+    lpitc = []
+    XX = pd.DataFrame({'Origin Pitch': initnote, 'Origin Octave': initoctave, 'Origin Duration':initdur})
+    XXX = XX.copy()
+    creatlastp = Noteclass.predict(XXX)
+    lastp = d['Next Pitch'].inverse_transform(creatlastp)
+    creatlasto = NoteclassO.predict(XXX)
+    lasto = d['Next Octave'].inverse_transform(creatlasto)
+    creatlastd = NoteclassD.predict(XXX)
+    lastd = d['Next Duration'].inverse_transform(creatlastd)
+
+    re = scoredf[scoredf['Origin Pitch'].values == lastp]
+    ree = re[re['Origin Octave'].values == lasto]
+    reee = ree[ree['Origin Duration'].values == lastd]
+
+    #Add it to a song21 Object
+    m1 = stream.Measure()
+    n1 = note.Note(name=lastp)
+    n1.octave = lasto[0]
+    ff = duration.convertTypeToQuarterLength(lastd[0])
+    dd= duration.Duration(ff)
+    n1.duration = dd
+    m1.append(n1)
+
+
+#ok, so now lets loop it
+
+for nn in range(1,500):
+    XX = pd.DataFrame({'Origin Pitch':lastp, 'Origin Octave': lasto, 'Origin Duration': lastd})
+    #print("XX Dataframe before predict")
+    #print(XX)
+    XXX = XX.apply(lambda x: d[x.name].transform(x))
+
+    creatlastp = Noteclass.predict(XXX)
+    thisp = d['Next Pitch'].inverse_transform(creatlastp)
+    creatlasto = NoteclassO.predict(XXX)
+    thiso = d['Next Octave'].inverse_transform(creatlasto)
+    creatlastd = NoteclassD.predict(XXX)
+    thisd = d['Next Duration'].inverse_transform(creatlastd)
+    re = estas[estas['Origin Pitch'].values == lastp]
+    ree = re[re['Origin Octave'].values == lasto]
+    reee = ree[ree['Origin Duration'].values == lastd]
+
+
+   #If orig and next are the same pitch, let's twweak it a little bit
+
+    if thisp == lastp:
+       reee['PROB'] = reee[0].transform(lambda x: x / x.sum())
+       elements = reee['Next Pitch'].values
+       probabilities = reee['PROB'].values
+
+       x = np.random.choice(elements, 1, p=probabilities)  # the value of the event under the mass prob. function
+       thisp = x
+
+    lll.append([str(lasto[0]),str(lastp),str(lastd)])
+
+
+    #Add it to a song21 Object
+    nin = str(thisp[0])+str(thiso[0])
+    n1 = note.Note(nin)
+    n1.octave = thiso[0]
+    ff = duration.convertTypeToQuarterLength(thisd[0])
+    dd= duration.Duration(ff)
+    n1.duration = dd
+    m1.append(n1)
+    lastp = thisp
+    lasto = thiso
+    lastd = thisd
+
+print("Final list and most recurring steps: ")
+print(lll)
+c = Counter((elem[1],elem[0],elem[2]) for elem in lll)
+print(c.most_common(10))
+
+#Music21 song build up
+part = stream.Part()
+part.append(m1)
+Songg = stream.Score()
+Songg.insert(0, part)
+
+print("Generated Music21 Scoreid: ", Songg)
+
+        #listen in midi!
+notestream = part[0].flat.notes.stream()  # flat to make all voices inside the part available, create iterator
+print("The part selected now contains: ", notestream.elements)                       #notestream.show('midi') to make sure we have the rigt part.
+print("")
+
+Songg.show('midi')
+
+
+
+
+
+
+
+
